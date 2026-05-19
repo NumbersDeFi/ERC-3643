@@ -60,7 +60,7 @@
  *     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-pragma solidity 0.8.17;
+pragma solidity ^0.8.17;
 
 import "@onchain-id/solidity/contracts/interface/IClaimIssuer.sol";
 import "@onchain-id/solidity/contracts/interface/IIdentity.sol";
@@ -171,7 +171,10 @@ contract IdentityRegistry is IIdentityRegistry, AgentRoleUpgradeable, IRStorage 
      */
     // solhint-disable-next-line code-complexity
     function isVerified(address _userAddress) external view override returns (bool) {
-        if (address(identity(_userAddress)) == address(0)) {return false;}
+        address idAddr = address(identity(_userAddress));
+        if (idAddr == address(0)) {
+            return false;
+        }
         uint256[] memory requiredClaimTopics = _tokenTopicsRegistry.getClaimTopics();
         if (requiredClaimTopics.length == 0) {
             return true;
@@ -187,7 +190,9 @@ contract IdentityRegistry is IIdentityRegistry, AgentRoleUpgradeable, IRStorage 
             IClaimIssuer[] memory trustedIssuers =
             _tokenIssuersRegistry.getTrustedIssuersForClaimTopic(requiredClaimTopics[claimTopic]);
 
-            if (trustedIssuers.length == 0) {return false;}
+            if (trustedIssuers.length == 0) {
+                return false;
+            }
 
             bytes32[] memory claimIds = new bytes32[](trustedIssuers.length);
             for (uint256 i = 0; i < trustedIssuers.length; i++) {
@@ -197,16 +202,24 @@ contract IdentityRegistry is IIdentityRegistry, AgentRoleUpgradeable, IRStorage 
             for (uint256 j = 0; j < claimIds.length; j++) {
                 (foundClaimTopic, scheme, issuer, sig, data, ) = identity(_userAddress).getClaim(claimIds[j]);
 
-                if (foundClaimTopic == requiredClaimTopics[claimTopic]) {
+                // Require claim to be for this topic and from the trusted issuer we are checking (claimId was built from trustedIssuers[j]).
+                if (foundClaimTopic == requiredClaimTopics[claimTopic] && issuer == address(trustedIssuers[j])) {
+                    try IClaimIssuer(issuer).isClaimRevoked(sig) returns (bool _revoked) {
+                        if (_revoked) {
+                            if (j == (claimIds.length - 1)) {
+                                return false;
+                            }
+                            continue;
+                        }
+                    } catch {
+                        // If issuer does not implement isClaimRevoked, proceed to isClaimValid.
+                    }
                     try IClaimIssuer(issuer).isClaimValid(identity(_userAddress), requiredClaimTopics[claimTopic], sig,
                         data) returns(bool _validity) {
 
-                        if (
-                            _validity
-                        ) {
+                        if (_validity) {
                             j = claimIds.length;
-                        }
-                        if (!_validity && j == (claimIds.length - 1)) {
+                        } else if (j == (claimIds.length - 1)) {
                             return false;
                         }
                     } catch {

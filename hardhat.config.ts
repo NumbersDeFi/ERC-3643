@@ -6,15 +6,13 @@ import 'solidity-coverage';
 import '@nomiclabs/hardhat-solhint';
 import '@primitivefi/hardhat-dodoc';
 
+const optimizerSettings = { optimizer: { enabled: true, runs: 200 } };
+
+// Single compiler 0.8.18: pragmas were patched to ^0.8.17 in contracts/ and node_modules/@onchain-id (avoids HH501 download).
 const config: HardhatUserConfig = {
   solidity: {
-    version: '0.8.17',
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 200,
-      },
-    },
+    version: '0.8.18',
+    settings: optimizerSettings,
   },
   gasReporter: {
     enabled: true,
