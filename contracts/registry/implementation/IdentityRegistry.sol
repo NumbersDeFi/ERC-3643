@@ -170,7 +170,10 @@ contract IdentityRegistry is IIdentityRegistry, AgentRoleUpgradeable, IRStorage 
      *  @dev See {IIdentityRegistry-isVerified}.
      */
     // solhint-disable-next-line code-complexity
-    function isVerified(address _userAddress) external view override returns (bool) {
+    // YF extension point: the shared implementation can exempt narrowly scoped
+    // protocol infrastructure while preserving this complete claim-validation
+    // path for every other address.
+    function isVerified(address _userAddress) public view virtual override returns (bool) {
         address idAddr = address(identity(_userAddress));
         if (idAddr == address(0)) {
             return false;
