@@ -12,6 +12,7 @@
 pragma solidity ^0.8.17;
 
 import "@onchain-id/solidity/contracts/interface/IIdentity.sol";
+import "@openzeppelin/contracts/proxy/Clones.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import "../CustomClaimIssuer.sol";
@@ -66,6 +67,14 @@ contract ClaimIssuerFactory is EIP712 {
     IYieldFabricIdentityFactory private immutable _IDENTITY_FACTORY;
     IYieldFabricAccountFactory private immutable _ACCOUNT_FACTORY;
 
+    /// @dev Inert library-mode CustomClaimIssuer deployed once from this
+    ///      constructor; every Claim Issuer this factory creates is an EIP-1167
+    ///      clone of it. This keeps the ~13 KB CustomClaimIssuer runtime out of
+    ///      every per-account deployment (~2.6M gas of code deposit each) and
+    ///      out of this factory's own runtime code (which previously sat within
+    ///      148 bytes of the EIP-170 limit).
+    address private immutable _CLAIM_ISSUER_IMPLEMENTATION;
+
     /// owner => Claim Issuer contract address (for resolve when issuing claims)
     mapping(address => address) private _claimIssuerByOwner;
     mapping(address => uint256) public nonces;
@@ -115,6 +124,11 @@ contract ClaimIssuerFactory is EIP712 {
 
         _IDENTITY_FACTORY = IYieldFabricIdentityFactory(identityFactory_);
         _ACCOUNT_FACTORY = IYieldFabricAccountFactory(accountFactory_);
+
+        // Library mode: the implementation records _initialized = true with
+        // _canInteract = false, so it can never be initialized or interacted
+        // with directly. Its immutable attachment factory is this factory.
+        _CLAIM_ISSUER_IMPLEMENTATION = address(new CustomClaimIssuer(address(this), true));
     }
 
     /**
@@ -418,13 +432,31 @@ contract ClaimIssuerFactory is EIP712 {
         return _ENTITY_CREATION_CAPABILITY;
     }
 
+    /// @notice Implementation contract every created Claim Issuer clone delegates to.
+    function claimIssuerImplementation() external view returns (address) {
+        return _CLAIM_ISSUER_IMPLEMENTATION;
+    }
+
+    /**
+     * @dev Clone the inert implementation and initialize it in the same
+     *      transaction. Initialization grants this factory the sole MANAGEMENT
+     *      key — exactly the state the previous full `new CustomClaimIssuer`
+     *      constructor produced — so the bootstrap key dance at the call sites
+     *      is unchanged and `_assertTerminalKeyState` still proves the factory
+     *      key was removed.
+     */
+    function _newClaimIssuer() internal returns (CustomClaimIssuer claimIssuer) {
+        claimIssuer = CustomClaimIssuer(Clones.clone(_CLAIM_ISSUER_IMPLEMENTATION));
+        claimIssuer.initialize(address(this));
+    }
+
     function _createClaimIssuer(address owner_, address identity, address account)
         internal
         returns (address claimIssuer)
     {
         if (_claimIssuerByOwner[owner_] != address(0)) revert AlreadyExists();
 
-        CustomClaimIssuer ci = new CustomClaimIssuer(address(this));
+        CustomClaimIssuer ci = _newClaimIssuer();
         claimIssuer = address(ci);
 
         bytes32 ownerKeyHash = _addressKey(owner_);
@@ -459,7 +491,7 @@ contract ClaimIssuerFactory is EIP712 {
             _entityClaimIssuerByAlias[account] != address(0)
         ) revert AlreadyExists();
 
-        claimIssuer = address(new CustomClaimIssuer(address(this)));
+        claimIssuer = address(_newClaimIssuer());
         _addKey(CustomClaimIssuer(claimIssuer), _addressKey(identity), _MANAGEMENT_KEY);
         _addKey(CustomClaimIssuer(claimIssuer), _addressKey(claimSigner), _CLAIM_KEY);
         _removeKey(
